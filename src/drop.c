@@ -5,11 +5,13 @@
 #include "common.h"
 #define NAME "drop"
 
-static Ihandle *inboundCheckbox, *outboundCheckbox, *chanceInput;
+static Ihandle *inboundCheckbox, *outboundCheckbox, *chanceInput, *burstLossInput;
 
 static volatile short dropEnabled = 0,
     dropInbound = 1, dropOutbound = 1,
-    chance = 1000; // [0-10000]
+    chance = 1000, // [0-10000]
+    consecutiveDropCount = 0,
+    bulkLossChance = 0;
 
 
 static Ihandle* dropSetupUI() {
@@ -18,6 +20,8 @@ static Ihandle* dropSetupUI() {
         outboundCheckbox = IupToggle("Outbound", NULL),
         IupLabel("Chance(%):"),
         chanceInput = IupText(NULL),
+        IupLabel("Burst(%):"),
+        burstLossInput = IupText(NULL),
         NULL
     );
 
@@ -25,6 +29,10 @@ static Ihandle* dropSetupUI() {
     IupSetAttribute(chanceInput, "VALUE", "10.0");
     IupSetCallback(chanceInput, "VALUECHANGED_CB", uiSyncChance);
     IupSetAttribute(chanceInput, SYNCED_VALUE, (char*)&chance);
+    IupSetAttribute(burstLossInput, "VISIBLECOLUMNS", "6");
+    IupSetAttribute(burstLossInput, "VALUE", "0.0");
+    IupSetCallback(burstLossInput, "VALUECHANGED_CB", uiSyncChance);
+    IupSetAttribute(burstLossInput, SYNCED_VALUE, (char*)&bulkLossChance);
     IupSetCallback(inboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
     IupSetAttribute(inboundCheckbox, SYNCED_VALUE, (char*)&dropInbound);
     IupSetCallback(outboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
@@ -60,13 +68,19 @@ static short dropProcess(PacketNode *head, PacketNode* tail) {
         // chance in range of [0, 10000]
         if (checkDirection(pac->addr.Outbound, dropInbound, dropOutbound)
             && calcChance(chance)) {
-            LOG("dropped with chance %.1f%%, direction %s",
+            if ((consecutiveDropCount > 0 && calcChance(bulkLossChance)) || calcChance(chance)) {
+                LOG("dropped with chance %.1f%%, direction %s",
                 chance/100.0, pac->addr.Outbound ? "OUTBOUND" : "INBOUND");
-            freeNode(popNode(pac));
-            ++dropped;
-        } else {
-            head = head->next;
+                freeNode(popNode(pac));
+                ++dropped;
+                ++consecutiveDropCount;
+                continue;
+            }
+            else {
+                consecutiveDropCount = 0;
+            }
         }
+        head = head->next;
     }
 
     return dropped > 0;
